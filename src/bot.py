@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+from collections import Counter
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.enums import ParseMode, ChatType
+from aiogram.enums import ChatType
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 
-from src.config import TELEGRAM_BOT_TOKEN
+from src.config import TELEGRAM_BOT_TOKEN, BASE_DIR
 from src.knowledge_base import KnowledgeBase
 from src.llm_client import LLMClient
 
@@ -50,6 +52,52 @@ HELP_MESSAGE = """Как пользоваться ботом:
 /help — эта справка"""
 
 BOT_USERNAME = "AleksandrDmitrov_BEEBOT"
+
+# (kb_source_stem, display_name, pdf_filename)
+# Index in this list is used as callback_data to stay within 64-byte limit
+INSTRUCTIONS = [
+    ("«УНИВЕРСАЛЬНАЯ_ПРОГРАММА_ОЗДОРОВЛЕНИЯ»", "Универсальная программа оздоровления",  "«УНИВЕРСАЛЬНАЯ_ПРОГРАММА_ОЗДОРОВЛЕНИЯ».pdf"),
+    ("Антивирус",                               "Настойка Антивирус",                    "Антивирус.pdf"),
+    ("Иммунитет ребенка",                       "Иммунитет ребёнка",                     "Иммунитет ребенка.pdf"),
+    ("Инструкция ТГ",                           "Инструкция ТГ",                         "Инструкция ТГ.pdf"),
+    ("Настойка «Успокоин» (Травяная)",          "Успокоин (травяная настойка)",          "Настойка «Успокоин» (Травяная).pdf"),
+    ("Настойка ПЖВМ",                           "Настойка ПЖВМ (огнёвка)",               "Настойка ПЖВМ.pdf"),
+    ("Настойка Подмора пчелиного (на самогоне 40°)", "Настойка подмора пчелиного",       "Настойка Подмора пчелиного (на самогоне 40°).pdf"),
+    ("Перга",                                   "Перга (пчелиный хлеб)",                 "Перга.pdf"),
+    ("Приложение к УПО (1)",                    "Приложение к УПО",                      "Приложение к УПО (1).pdf"),
+    ("Прополис_ сухой + настойка",              "Прополис (сухой + настойка)",           "Прополис_ сухой + настойка.pdf"),
+    ("Пчелиная обножка",                        "Пчелиная обножка (цветочная пыльца)",   "Пчелиная обножка.pdf"),
+    ("Трутнёвый гомогенат",                     "Трутнёвый гомогенат",                   "Трутнёвый гомогенат.pdf"),
+    ("ФитоЭнергия",                             "Настойка ФитоЭнергия",                  "ФитоЭнергия.pdf"),
+]
+
+# Lookup: stem → (index, display_name, filename)
+_STEM_TO_INSTRUCTION = {
+    stem: (i, name, fname)
+    for i, (stem, name, fname) in enumerate(INSTRUCTIONS)
+}
+
+
+def _get_instruction_keyboard(chunks: list[dict]) -> InlineKeyboardMarkup | None:
+    """Find the most relevant instruction PDF and return an inline keyboard button."""
+    stems = [
+        chunk["source"][4:]  # strip "pdf:" prefix
+        for chunk in chunks
+        if chunk.get("source", "").startswith("pdf:")
+        and chunk["source"][4:] in _STEM_TO_INSTRUCTION
+    ]
+    if not stems:
+        return None
+
+    top_stem = Counter(stems).most_common(1)[0][0]
+    idx, name, filename = _STEM_TO_INSTRUCTION[top_stem]
+
+    if not (BASE_DIR / filename).exists():
+        return None
+
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"📄 Инструкция: {name}", callback_data=f"doc:{idx}")
+    ]])
 
 
 @dp.message(CommandStart())
@@ -102,13 +150,36 @@ async def handle_question(message: types.Message):
 
         # Generate response
         response = llm.generate(query, chunks)
-        await message.reply(response)
+        keyboard = _get_instruction_keyboard(chunks)
+        await message.reply(response, reply_markup=keyboard)
 
     except Exception as e:
         logger.error(f"Error handling question: {e}")
         await message.reply(
             "Извини, что-то пошло не так. Попробуй спросить ещё раз чуть позже."
         )
+
+
+@dp.callback_query(F.data.startswith("doc:"))
+async def send_instruction_pdf(callback: types.CallbackQuery):
+    """Send the instruction PDF when user taps the button."""
+    try:
+        idx = int(callback.data.split(":")[1])
+        _, name, filename = INSTRUCTIONS[idx]
+    except (ValueError, IndexError):
+        await callback.answer("Инструкция не найдена.", show_alert=True)
+        return
+
+    pdf_path = BASE_DIR / filename
+    if not pdf_path.exists():
+        await callback.answer("Файл не найден на сервере.", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.message.answer_document(
+        document=FSInputFile(str(pdf_path), filename=filename),
+        caption=f"📄 {name}",
+    )
 
 
 async def main():
