@@ -49,7 +49,17 @@ HELP_MESSAGE = """Как пользоваться ботом:
 - Как укрепить иммунитет ребёнка?
 
 /start — начать
-/help — эта справка"""
+/help — эта справка
+/products — список продуктов с инструкциями"""
+
+PRODUCTS_MESSAGE = "Вот все продукты, по которым есть инструкции — нажми на любой, чтобы получить PDF:"
+
+# Keywords that trigger the /products list
+_PRODUCTS_TRIGGERS = {
+    "какие продукты", "список продуктов", "что есть", "что у тебя есть",
+    "какие настойки", "какие товары", "что продаёшь", "что продаешь",
+    "ассортимент", "что можно купить", "какие препараты",
+}
 
 BOT_USERNAME = "AleksandrDmitrov_BEEBOT"
 
@@ -76,6 +86,18 @@ _STEM_TO_INSTRUCTION = {
     stem: (i, name, fname)
     for i, (stem, name, fname) in enumerate(INSTRUCTIONS)
 }
+
+
+def _build_products_keyboard() -> InlineKeyboardMarkup:
+    """Build a keyboard with all available instruction PDFs (2 buttons per row)."""
+    buttons = [
+        InlineKeyboardButton(text=f"📄 {name}", callback_data=f"doc:{i}")
+        for i, (stem, name, fname) in enumerate(INSTRUCTIONS)
+        if (BASE_DIR / fname).exists()
+    ]
+    # 2 per row
+    rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _get_instruction_keyboard(chunks: list[dict]) -> InlineKeyboardMarkup | None:
@@ -110,6 +132,11 @@ async def cmd_help(message: types.Message):
     await message.answer(HELP_MESSAGE)
 
 
+@dp.message(Command("products"))
+async def cmd_products(message: types.Message):
+    await message.answer(PRODUCTS_MESSAGE, reply_markup=_build_products_keyboard())
+
+
 def _should_respond(message: types.Message) -> bool:
     """Check if bot should respond to this message."""
     # Always respond in private chats
@@ -136,6 +163,12 @@ async def handle_question(message: types.Message):
     query = (message.text or "").replace(f"@{BOT_USERNAME}", "").strip()
     if len(query) < 3:
         await message.reply("Напиши вопрос подлиннее, чтобы я мог помочь.")
+        return
+
+    # Detect "what products do you have" type queries
+    query_lower = query.lower()
+    if any(trigger in query_lower for trigger in _PRODUCTS_TRIGGERS):
+        await message.reply(PRODUCTS_MESSAGE, reply_markup=_build_products_keyboard())
         return
 
     logger.info(f"Question from {message.from_user.id} in {message.chat.type}: {query}")
