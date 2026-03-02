@@ -1,0 +1,15 @@
+[Unit]
+Description=BEEBOT Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=beebot
+WorkingDirectory=/opt/beebot
+EnvironmentFile=/opt/beebot/.env
+ExecStart=/opt/beebot/.venv/bin/python -m src.bot
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

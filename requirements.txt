@@ -1,0 +1,19 @@
+# Telegram bot
+aiogram==3.25.0
+
+# AI / LLM
+groq==1.0.0
+
+# Embeddings & Vector search
+sentence-transformers==5.2.3
+faiss-cpu==1.13.2
+
+# Data processing
+yt-dlp==2026.2.21
+youtube-transcript-api==1.2.4
+PyPDF2==3.0.1
+langchain-text-splitters==1.1.1
+
+# Utils
+python-dotenv==1.2.2
+numpy==2.4.2

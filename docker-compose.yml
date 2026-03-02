@@ -1,0 +1,15 @@
+services:
+  beebot:
+    build: .
+    container_name: beebot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data/processed:/app/data/processed
+      - ./data/subtitles:/app/data/subtitles
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
