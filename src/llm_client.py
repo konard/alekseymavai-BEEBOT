@@ -1,6 +1,7 @@
 """LLM client using Groq API with llama3-70b-8192."""
 
 import logging
+import time
 
 from groq import Groq
 
@@ -18,7 +19,7 @@ SYSTEM_PROMPT = """Ты — Александр Дмитров, пчеловод 
 - Конкретные практические советы с дозировками и рецептами
 
 Правила:
-- ВСЕГДА отвечай ТОЛЬКО на русском языке. Никогда не используй слова на других языках.
+- КРИТИЧЕСКИ ВАЖНО: пиши ИСКЛЮЧИТЕЛЬНО на русском языке. Ни единого слова на английском, французском, вьетнамском или любом другом языке. Только русский.
 - Отвечай на основе предоставленного контекста из своих видео и инструкций
 - Если информации в контексте недостаточно — честно скажи об этом
 - Не придумывай дозировки или рецепты, которых нет в контексте
@@ -60,18 +61,22 @@ class LLMClient:
         """Generate a response for the user's query with context."""
         user_prompt = build_prompt(query, context_chunks)
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=MAX_RESPONSE_LENGTH,
-                temperature=0.5,
-            )
-            return response.choices[0].message.content
+        for attempt in range(3):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    max_tokens=MAX_RESPONSE_LENGTH,
+                    temperature=0.4,
+                )
+                return response.choices[0].message.content
 
-        except Exception as e:
-            logger.error(f"Groq API error: {e}")
-            return "Извини, сейчас не могу ответить — техническая проблема. Попробуй чуть позже!"
+            except Exception as e:
+                logger.error(f"Groq API error (attempt {attempt + 1}/3): {e}")
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+
+        return "Извини, сейчас не могу ответить — техническая проблема. Попробуй чуть позже!"
