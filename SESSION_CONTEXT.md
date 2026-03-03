@@ -1,6 +1,6 @@
 # BEEBOT — Контекст сессии
 
-> Последнее обновление: 2 марта 2026
+> Последнее обновление: 3 марта 2026
 
 ## Статус проекта
 
@@ -12,15 +12,17 @@
 | База знаний | ✅ 410 чанков | 13 PDF + 26 YouTube видео |
 | Groq LLM | ✅ Через прокси | llama-3.3-70b-versatile |
 | VPS Docker | ✅ Запущен | 185.233.200.13, container `beebot` |
-| Группы Telegram | ✅ Поддержка добавлена | По упоминанию @bot или reply |
+| Groq Proxy | ✅ systemd | groq-proxy.service на hive |
+| SSH Туннель | ✅ systemd | groq-tunnel.service на hive |
+| Группы Telegram | ✅ | По упоминанию @bot или reply |
 
 ## Архитектура
 
 ```
 Telegram → aiogram бот (VPS Docker, network_mode: host)
   → FAISS (семантика 70% + стилометрия 30%, 410 чанков)
-  → SSH-туннель (VPS:8990 → hive:8990)
-  → Groq Proxy (hive, порт 8990)
+  → SSH-туннель (VPS:8990 → hive:8990)  ← systemd, auto-restart
+  → Groq Proxy (hive, порт 8990)         ← systemd, auto-restart
   → Groq API (llama-3.3-70b-versatile)
   → Ответ в стиле Александра Дмитрова
 ```
@@ -29,11 +31,17 @@ Telegram → aiogram бот (VPS Docker, network_mode: host)
 
 | Ресурс | Адрес | Пользователь |
 |--------|-------|-------------|
-| VPS | 185.233.200.13 | ai-agent (SSH-ключ) |
+| VPS | 185.233.200.13 | ai-agent (SSH-ключ id_ed25519) |
+| hive | локальная машина | hive / new (ai-agent@traderagent) |
 | GitHub (upstream) | github.com/alekseymavai/BEEBOT | alekseymavai |
 | GitHub (fork) | github.com/unidel2035/BEEBOT | unidel2035 |
 | Локальный путь | /home/hive/BEEBOT/ | hive |
 | Groq Console | console.groq.com | alekseymavai |
+
+**SSH доступ к VPS:**
+- Ключ hive: `/home/hive/.ssh/id_ed25519` → `ai-agent@185.233.200.13` ✅
+- Ключ new (ai-agent): `/home/new/.ssh/id_ed25519` → `ai-agent@185.233.200.13` ✅
+- Алиас в SSH config hive: `ssh beebot-vps`
 
 **Важно:** аккаунт `unidel2035` не имеет push-доступа к `alekseymavai/BEEBOT`. Все изменения — через fork + PR.
 
@@ -42,40 +50,70 @@ Telegram → aiogram бот (VPS Docker, network_mode: host)
 ```
 /home/hive/BEEBOT/
 ├── src/
-│   ├── bot.py              # Telegram-бот (aiogram 3, группы + личка)
+│   ├── bot.py              # Telegram-бот: /start с кнопками, /products по категориям
 │   ├── config.py           # Конфигурация из .env
-│   ├── knowledge_base.py   # FAISS + стилометрия, гибридный поиск
+│   ├── knowledge_base.py   # FAISS + стилометрия, умный чанкинг по типу источника
 │   ├── llm_client.py       # Groq API (с поддержкой GROQ_BASE_URL прокси)
 │   ├── pdf_loader.py       # Извлечение текста из PDF
-│   ├── youtube_loader.py   # Загрузка субтитров YouTube
+│   ├── youtube_loader.py   # Загрузка субтитров YouTube (26 видео)
 │   └── build_kb.py         # Сборка базы знаний
 ├── data/
-│   ├── subtitles/          # 26 файлов .txt (131K символов)
-│   ├── texts/              # 13 файлов из PDF (52K символов)
+│   ├── subtitles/          # 26 файлов .txt (238 KB)
+│   ├── texts/              # 16 файлов из PDF (107 KB)
 │   └── processed/
-│       ├── index.faiss     # FAISS-индекс (623 KB)
-│       └── chunks.json     # Метаданные чанков (424 KB)
+│       ├── index.faiss     # FAISS-индекс
+│       └── chunks.json     # Метаданные чанков (410 чанков)
+├── systemd/                # ← НОВОЕ
+│   ├── groq-proxy.service  # Автозапуск прокси на hive
+│   ├── groq-tunnel.service # Автозапуск SSH-туннеля на hive
+│   └── install-hive-services.sh
 ├── groq_proxy.py           # Reverse proxy для Groq API (порт 8990)
 ├── Dockerfile
 ├── docker-compose.yml      # network_mode: host
 ├── deploy.sh               # Скрипт деплоя на VPS
-├── beebot.service          # systemd unit
+├── beebot.service          # systemd unit (VPS)
 ├── .env                    # Секреты (НЕ в git)
 └── .env.example
 ```
 
-## Фоновые процессы на hive (требуют перезапуска при перезагрузке)
+## Фоновые процессы на hive — АВТОМАТИЗИРОВАНЫ через systemd
 
 ```bash
-# 1. Groq Proxy (обязательно для работы бота!)
-source /home/hive/BEEBOT/.venv/bin/activate
-nohup python /home/hive/BEEBOT/groq_proxy.py > /home/hive/BEEBOT/proxy.log 2>&1 &
+# Статус
+systemctl status groq-proxy
+systemctl status groq-tunnel
 
-# 2. SSH-туннель (обязательно для работы бота!)
-ssh -f -N -R 8990:localhost:8990 ai-agent@185.233.200.13
+# Логи
+journalctl -u groq-proxy -f
+journalctl -u groq-tunnel -f
+
+# Перезапуск (если нужно вручную)
+systemctl restart groq-proxy groq-tunnel
 ```
 
-**ВНИМАНИЕ:** Если hive перезагрузится — бот перестанет отвечать (403 от Groq). Нужно заново запустить прокси и туннель.
+**Сервисы установлены, включены (enabled) и работают.** При перезагрузке hive — поднимаются автоматически. `groq-tunnel` зависит от `groq-proxy` (стартует после него).
+
+## UI бота (актуально)
+
+- `/start` — приветствие + кнопки `📦 Все продукты` / `❓ Как пользоваться`
+- `/products` — список продуктов сгруппирован по категориям:
+  - 🍯 Продукты пчеловодства (Перга, Обножка, Гомогенат)
+  - 🌿 Настойки (Прополис, ПЖВМ, Подмор, Успокоин, Антивирус, ФитоЭнергия)
+  - 📋 Программы здоровья (УПО, Приложение к УПО, Иммунитет ребёнка, Инструкция ТГ)
+- После каждого ответа — кнопки `📄 [конкретный PDF]` + `📦 Все продукты`
+
+## Чанкинг базы знаний (актуально)
+
+| Источник | chunk_size | overlap | Доп. обработка |
+|---|---|---|---|
+| PDF (`pdf:*`) | 900 | 150 | — |
+| YouTube (`youtube:*`) | 1200 | 250 | Очистка повторов и timestamps |
+| Default | 900 | 150 | — |
+
+**Индекс нужно пересобрать на VPS** после последних изменений:
+```bash
+ssh ai-agent@185.233.200.13 "cd /home/ai-agent/BEEBOT && docker exec beebot python -m src.build_kb"
+```
 
 ## Секреты (.env на VPS)
 
@@ -88,82 +126,58 @@ GROQ_BASE_URL=http://localhost:8990
 
 ## Известные проблемы и ограничения
 
-1. **Groq блокирует IP VPS** — решено через SSH-туннель + прокси на hive
-2. **YouTube блокирует IP hive** — субтитры скачаны через Docker на VPS
-3. **Прокси + туннель на hive** — не переживёт перезагрузку, нужно автоматизировать (systemd или cron @reboot)
-4. **llama-3.3-70b-versatile** иногда вставляет иноязычные слова — частично решено промптом, но может повторяться
+1. **Groq блокирует IP VPS** — решено: SSH-туннель + прокси на hive (systemd)
+2. **YouTube блокирует IP hive** — субтитры скачаны заранее и хранятся в `data/subtitles/`
+3. **YouTube блокирует IP VPS** — нельзя использовать VPS для скрапинга YouTube (риск блокировки порушит туннель Groq)
+4. **llama-3.3-70b-versatile** иногда вставляет иноязычные слова — частично решено промптом
 5. **unidel2035 нет push-доступа** к alekseymavai/BEEBOT — только fork + PR
 
-## GitHub Issues (все открыты)
+## Расширение базы знаний — план
 
-| # | Название | Статус по факту |
-|---|----------|----------------|
-| 1 | Настроить окружение | ✅ Сделано |
-| 2 | Загрузчик YouTube | ✅ Сделано (26/27 видео) |
-| 3 | Гибридная база знаний | ✅ Сделано (410 чанков) |
-| 4 | Интеграция с Groq | ✅ Сделано (llama-3.3-70b-versatile) |
-| 5 | Telegram-бот | ✅ Сделано (личка + группы) |
-| 6 | Деплой на VPS | ✅ Сделано (Docker) |
-| 7 | Тестирование | ⚠️ Частично (нужно больше тестов) |
+**Следующий приоритет:** добавить обучающих данных.
 
-## Git-история
+Лучшие источники (по убыванию ценности):
+1. **YouTube Data API v3** — скачать комментарии к видео Дмитрова. Комментарии = реальные Q&A от подписчиков + ответы автора в его стиле. Нужен API-ключ Google Cloud. **Не блокирует IP** — лимиты по ключу.
+2. **Новые видео с канала** — проверить `@a.dmitrov` на новые видео, добавить ID в `youtube_loader.py`
+3. **FAQ-файл вручную** — `data/texts/faq.txt` с частыми вопросами и ответами
+
+**Почему не yt-dlp на VPS:** VPS — дата-центровый IP, YouTube его заблокирует так же как hive. Это разрушит туннель Groq.
+
+## Git-история (последние)
 
 ```
-1f184bc fix: русскоязычный промпт + прокси для Groq API
-57bfaf0 Merge pull request #8 from unidel2035/main
-d5e8916 fix: заменить llama3-70b-8192 на llama-3.3-70b-versatile
-ae42b4f feat: MVP бота-помощника для блога о пчеловодстве
-4d0bb0c Инструкции препаратов на основе пчелопродуктов
-aae9beb Initial commit
+8ad0bc2 feat: systemd services, UI categories, smart chunking
+cd10e16 fix: skip command messages in handle_question
+2584be0 feat: /products команда + защита от галлюцинаций
+9657866 fix: keyword-буст поиска + очистка OCR-текстов
+852f099 feat: кнопка «Показать инструкцию» под ответом бота
 ```
-
-**Незакоммиченные изменения:** `src/bot.py` (поддержка групп), `SESSION_CONTEXT.md`
-
-## Что делать дальше
-
-### Приоритет 1 — Стабильность
-- [ ] Автоматизировать прокси + туннель на hive (systemd)
-- [ ] Или найти LLM-провайдер без IP-блокировки (OpenRouter, Together AI)
-- [ ] Закрыть выполненные Issues на GitHub
-
-### Приоритет 2 — Качество ответов
-- [ ] Тонкая настройка системного промпта (больше примеров стиля автора)
-- [ ] Улучшить чанкинг (по смысловым блокам, а не по символам)
-- [ ] Добавить больше данных: комментарии YouTube, посты в соцсетях
-
-### Приоритет 3 — Функциональность
-- [ ] Кнопки (inline keyboard) для популярных вопросов
-- [ ] Команда /products — список продуктов
-- [ ] Лог вопросов для аналитики
-- [ ] Мониторинг (uptime, ошибки)
 
 ## Команды для быстрого старта сессии
 
 ```bash
 # Перейти в проект
-cd /home/hive/BEEBOT && source .venv/bin/activate
+cd /home/hive/BEEBOT
+
+# Статус сервисов на hive
+systemctl status groq-proxy groq-tunnel
+
+# Проверить туннель (порт 8990 на VPS)
+ssh ai-agent@185.233.200.13 "ss -tlnp | grep 8990"
 
 # Проверить бота на VPS
-ssh ai-agent@185.233.200.13 "docker logs --tail 5 beebot"
-
-# Проверить прокси
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8990/
-
-# Проверить туннель
-ssh ai-agent@185.233.200.13 "curl -s -o /dev/null -w '%{http_code}' http://localhost:8990/"
+ssh ai-agent@185.233.200.13 "docker logs --tail 10 beebot"
 
 # Перезапустить бота на VPS
-ssh ai-agent@185.233.200.13 "cd /home/ai-agent/BEEBOT && docker restart beebot"
+ssh ai-agent@185.233.200.13 "docker restart beebot"
 
-# Пересобрать базу знаний
-python -m src.build_kb
+# Пересобрать базу знаний на VPS
+ssh ai-agent@185.233.200.13 "cd /home/ai-agent/BEEBOT && docker exec beebot python -m src.build_kb"
 
-# Обновить код на VPS (быстро, без пересборки Docker)
+# Обновить код на VPS (без пересборки Docker)
 scp src/bot.py ai-agent@185.233.200.13:/home/ai-agent/BEEBOT/src/bot.py
-ssh ai-agent@185.233.200.13 "cd /home/ai-agent/BEEBOT && docker rm -f beebot && docker compose up -d --build"
+ssh ai-agent@185.233.200.13 "docker restart beebot"
 
-# Восстановить прокси и туннель (после перезагрузки hive)
-source /home/hive/BEEBOT/.venv/bin/activate
-nohup python /home/hive/BEEBOT/groq_proxy.py > /home/hive/BEEBOT/proxy.log 2>&1 &
-ssh -f -N -R 8990:localhost:8990 ai-agent@185.233.200.13
+# Полный редеплой (с пересборкой образа)
+ssh ai-agent@185.233.200.13 "cd /home/ai-agent/BEEBOT && git pull && docker compose up -d --build"
 ```
