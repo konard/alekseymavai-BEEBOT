@@ -10,12 +10,9 @@ User=hive
 # Exposes hive's local port 8990 as port 8990 on the VPS
 ExecStart=/usr/bin/ssh \
     -N \
-    -o ServerAliveInterval=30 \
-    -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \
-    -o StrictHostKeyChecking=accept-new \
     -R 8990:localhost:8990 \
-    root@185.233.200.13
+    beebot-vps
 Restart=always
 RestartSec=10
 StandardOutput=journal
