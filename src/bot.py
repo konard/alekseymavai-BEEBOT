@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+from collections import Counter
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.enums import ParseMode, ChatType
+from aiogram.enums import ChatType
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 
-from src.config import TELEGRAM_BOT_TOKEN
+from src.config import TELEGRAM_BOT_TOKEN, BASE_DIR
 from src.knowledge_base import KnowledgeBase
 from src.llm_client import LLMClient
 
@@ -31,7 +33,7 @@ WELCOME_MESSAGE = """Привет! Я бот-помощник Александр
 - Рецептах и дозировках
 - Пчеловодстве и здоровье
 
-Просто напиши свой вопрос!"""
+Просто напиши свой вопрос или выбери раздел ниже 👇"""
 
 HELP_MESSAGE = """Как пользоваться ботом:
 
@@ -47,14 +49,118 @@ HELP_MESSAGE = """Как пользоваться ботом:
 - Как укрепить иммунитет ребёнка?
 
 /start — начать
-/help — эта справка"""
+/help — эта справка
+/products — список продуктов с инструкциями"""
+
+PRODUCTS_MESSAGE = "Выбери продукт, чтобы получить PDF с инструкцией:"
+
+# Keywords that trigger the /products list
+_PRODUCTS_TRIGGERS = {
+    "какие продукты", "список продуктов", "что есть", "что у тебя есть",
+    "какие настойки", "какие товары", "что продаёшь", "что продаешь",
+    "ассортимент", "что можно купить", "какие препараты",
+}
 
 BOT_USERNAME = "AleksandrDmitrov_BEEBOT"
+
+# (kb_source_stem, display_name, pdf_filename, category)
+INSTRUCTIONS = [
+    # Продукты пчеловодства
+    ("Перга",                                   "Перга",                        "Перга.pdf",                                        "bee"),
+    ("Пчелиная обножка",                        "Обножка (пыльца)",             "Пчелиная обножка.pdf",                             "bee"),
+    ("Трутнёвый гомогенат",                     "Трутнёвый гомогенат",          "Трутнёвый гомогенат.pdf",                          "bee"),
+    # Настойки
+    ("Прополис_ сухой + настойка",              "Прополис",                     "Прополис_ сухой + настойка.pdf",                   "tincture"),
+    ("Настойка ПЖВМ",                           "ПЖВМ (огнёвка)",               "Настойка ПЖВМ.pdf",                                "tincture"),
+    ("Настойка Подмора пчелиного (на самогоне 40°)", "Подмор пчелиный",         "Настойка Подмора пчелиного (на самогоне 40°).pdf", "tincture"),
+    ("Настойка «Успокоин» (Травяная)",          "Успокоин",                     "Настойка «Успокоин» (Травяная).pdf",               "tincture"),
+    ("Антивирус",                               "Антивирус",                    "Антивирус.pdf",                                    "tincture"),
+    ("ФитоЭнергия",                             "ФитоЭнергия",                  "ФитоЭнергия.pdf",                                  "tincture"),
+    # Программы здоровья
+    ("«УНИВЕРСАЛЬНАЯ_ПРОГРАММА_ОЗДОРОВЛЕНИЯ»",  "Программа оздоровления (УПО)", "«УНИВЕРСАЛЬНАЯ_ПРОГРАММА_ОЗДОРОВЛЕНИЯ».pdf",       "program"),
+    ("Приложение к УПО (1)",                    "Приложение к УПО",             "Приложение к УПО (1).pdf",                         "program"),
+    ("Иммунитет ребенка",                       "Иммунитет ребёнка",            "Иммунитет ребенка.pdf",                            "program"),
+    ("Инструкция ТГ",                           "Инструкция ТГ",                "Инструкция ТГ.pdf",                                "program"),
+]
+
+# Lookup: stem → (index, display_name, filename)
+_STEM_TO_INSTRUCTION = {
+    stem: (i, name, fname)
+    for i, (stem, name, fname, _cat) in enumerate(INSTRUCTIONS)
+}
+
+_CATEGORY_LABELS = {
+    "bee":      "🍯 Продукты пчеловодства",
+    "tincture": "🌿 Настойки",
+    "program":  "📋 Программы здоровья",
+}
+
+
+def _build_start_keyboard() -> InlineKeyboardMarkup:
+    """Quick-start keyboard shown with /start."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📦 Все продукты", callback_data="show_products"),
+        InlineKeyboardButton(text="❓ Как пользоваться", callback_data="show_help"),
+    ]])
+
+
+def _build_products_keyboard() -> InlineKeyboardMarkup:
+    """Build a keyboard grouped by category (2 buttons per row)."""
+    rows = []
+    current_cat = None
+    cat_buttons = []
+
+    for i, (stem, name, fname, cat) in enumerate(INSTRUCTIONS):
+        if not (BASE_DIR / fname).exists():
+            continue
+        if cat != current_cat:
+            # Flush previous category buttons
+            if cat_buttons:
+                rows += [cat_buttons[j:j+2] for j in range(0, len(cat_buttons), 2)]
+            # Category header as disabled button
+            rows.append([InlineKeyboardButton(
+                text=_CATEGORY_LABELS.get(cat, cat),
+                callback_data="noop",
+            )])
+            cat_buttons = []
+            current_cat = cat
+        cat_buttons.append(InlineKeyboardButton(text=name, callback_data=f"doc:{i}"))
+
+    # Flush last category
+    if cat_buttons:
+        rows += [cat_buttons[j:j+2] for j in range(0, len(cat_buttons), 2)]
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _get_instruction_keyboard(chunks: list[dict]) -> InlineKeyboardMarkup | None:
+    """Find the most relevant instruction PDF and return an inline keyboard."""
+    stems = [
+        chunk["source"][4:]  # strip "pdf:" prefix
+        for chunk in chunks
+        if chunk.get("source", "").startswith("pdf:")
+        and chunk["source"][4:] in _STEM_TO_INSTRUCTION
+    ]
+    if not stems:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📦 Все продукты", callback_data="show_products"),
+        ]])
+
+    top_stem = Counter(stems).most_common(1)[0][0]
+    idx, name, filename = _STEM_TO_INSTRUCTION[top_stem]
+
+    if not (BASE_DIR / filename).exists():
+        return None
+
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"📄 {name}", callback_data=f"doc:{idx}"),
+        InlineKeyboardButton(text="📦 Все продукты", callback_data="show_products"),
+    ]])
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    await message.answer(WELCOME_MESSAGE)
+    await message.answer(WELCOME_MESSAGE, reply_markup=_build_start_keyboard())
 
 
 @dp.message(Command("help"))
@@ -62,26 +168,48 @@ async def cmd_help(message: types.Message):
     await message.answer(HELP_MESSAGE)
 
 
+@dp.message(Command("products"))
+async def cmd_products(message: types.Message):
+    await message.answer(PRODUCTS_MESSAGE, reply_markup=_build_products_keyboard())
+
+
+@dp.callback_query(F.data == "show_products")
+async def cb_show_products(callback: types.CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(PRODUCTS_MESSAGE, reply_markup=_build_products_keyboard())
+
+
+@dp.callback_query(F.data == "show_help")
+async def cb_show_help(callback: types.CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(HELP_MESSAGE)
+
+
+@dp.callback_query(F.data == "noop")
+async def cb_noop(callback: types.CallbackQuery):
+    """Category header buttons do nothing."""
+    await callback.answer()
+
+
 def _should_respond(message: types.Message) -> bool:
     """Check if bot should respond to this message."""
-    # Always respond in private chats
     if message.chat.type == ChatType.PRIVATE:
         return True
-
-    # In groups: respond if mentioned or replied to
     text = message.text or ""
     if f"@{BOT_USERNAME}" in text:
         return True
     if message.reply_to_message and message.reply_to_message.from_user:
         if message.reply_to_message.from_user.id == bot.id:
             return True
-
     return False
 
 
 @dp.message()
 async def handle_question(message: types.Message):
     """Handle user questions: search KB → generate response via Groq."""
+    if message.text and message.text.startswith("/"):
+        return
+
     if not _should_respond(message):
         return
 
@@ -90,19 +218,20 @@ async def handle_question(message: types.Message):
         await message.reply("Напиши вопрос подлиннее, чтобы я мог помочь.")
         return
 
-    logger.info(f"Question from {message.from_user.id} in {message.chat.type}: {query}")
+    query_lower = query.lower()
+    if any(trigger in query_lower for trigger in _PRODUCTS_TRIGGERS):
+        await message.reply(PRODUCTS_MESSAGE, reply_markup=_build_products_keyboard())
+        return
 
-    # Show typing indicator
+    logger.info(f"Question from {message.from_user.id} in {message.chat.type}: {query}")
     await bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        # Search knowledge base
         chunks = kb.search(query)
         logger.info(f"Found {len(chunks)} relevant chunks")
-
-        # Generate response
         response = llm.generate(query, chunks)
-        await message.reply(response)
+        keyboard = _get_instruction_keyboard(chunks)
+        await message.reply(response, reply_markup=keyboard)
 
     except Exception as e:
         logger.error(f"Error handling question: {e}")
@@ -111,10 +240,30 @@ async def handle_question(message: types.Message):
         )
 
 
+@dp.callback_query(F.data.startswith("doc:"))
+async def send_instruction_pdf(callback: types.CallbackQuery):
+    """Send the instruction PDF when user taps the button."""
+    try:
+        idx = int(callback.data.split(":")[1])
+        _, name, filename, _cat = INSTRUCTIONS[idx]
+    except (ValueError, IndexError):
+        await callback.answer("Инструкция не найдена.", show_alert=True)
+        return
+
+    pdf_path = BASE_DIR / filename
+    if not pdf_path.exists():
+        await callback.answer("Файл не найден на сервере.", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.message.answer_document(
+        document=FSInputFile(str(pdf_path), filename=filename),
+        caption=f"📄 {name}",
+    )
+
+
 async def main():
     logger.info("Starting BEEBOT...")
-
-    # Load knowledge base
     try:
         kb.load()
         logger.info(f"Knowledge base loaded: {len(kb.chunks)} chunks")
@@ -122,7 +271,6 @@ async def main():
         logger.error("Knowledge base not found! Run `python -m src.build_kb` first.")
         return
 
-    # Start polling
     logger.info("Bot is running!")
     await dp.start_polling(bot)
 

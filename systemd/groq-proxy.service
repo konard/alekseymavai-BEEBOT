@@ -1,0 +1,18 @@
+[Unit]
+Description=Groq API Reverse Proxy (BEEBOT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hive
+WorkingDirectory=/home/hive/BEEBOT
+ExecStart=/home/hive/BEEBOT/.venv/bin/python /home/hive/BEEBOT/groq_proxy.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=groq-proxy
+
+[Install]
+WantedBy=multi-user.target
