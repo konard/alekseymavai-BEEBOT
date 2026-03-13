@@ -118,13 +118,24 @@ class TestHandleQuestion:
         message.reply = AsyncMock()
         return message
 
+    def _make_state(self):
+        """Create a mock FSMContext (state) for handle_question."""
+        state = AsyncMock()
+        state.get_state = AsyncMock(return_value=None)
+        state.set_state = AsyncMock()
+        state.get_data = AsyncMock(return_value={})
+        state.update_data = AsyncMock()
+        state.clear = AsyncMock()
+        return state
+
     @pytest.mark.asyncio
     async def test_ignores_non_addressable_group_message(self):
         """Handler must not reply to group messages not aimed at bot."""
         msg = self._make_message(chat_type="group", text="обычный разговор")
+        state = self._make_state()
 
         with patch("src.bot._should_respond", return_value=False):
-            await handle_question(msg)
+            await handle_question(msg, state)
 
         msg.reply.assert_not_called()
 
@@ -132,9 +143,10 @@ class TestHandleQuestion:
     async def test_replies_to_short_query_with_prompt(self):
         """Handler should ask user for a longer question when query < 3 chars."""
         msg = self._make_message(text="?")
+        state = self._make_state()
 
         with patch("src.bot._should_respond", return_value=True):
-            await handle_question(msg)
+            await handle_question(msg, state)
 
         msg.reply.assert_called_once()
         call_text = msg.reply.call_args[0][0]
@@ -144,12 +156,14 @@ class TestHandleQuestion:
     async def test_calls_kb_search(self):
         """Handler should call orchestrator.route with the user's query."""
         msg = self._make_message(text="Как принимать прополис?")
+        state = self._make_state()
 
         mock_orchestrator = MagicMock()
         mock_orchestrator.route = AsyncMock(return_value=(
             "Принимайте по 20 капель.",
             [{"text": "...", "source": "pdf:X", "score": 0.9}],
         ))
+        mock_orchestrator.get_intent = MagicMock(return_value="consult")
 
         with (
             patch("src.bot._should_respond", return_value=True),
@@ -157,7 +171,7 @@ class TestHandleQuestion:
             patch("src.bot.bot") as mock_bot,
         ):
             mock_bot.send_chat_action = AsyncMock()
-            await handle_question(msg)
+            await handle_question(msg, state)
 
         mock_orchestrator.route.assert_called_once_with(msg.from_user.id, "Как принимать прополис?")
 
@@ -166,9 +180,11 @@ class TestHandleQuestion:
         """Handler should call orchestrator.route and send the response."""
         chunks = [{"text": "Прополис...", "source": "pdf:X", "score": 0.9}]
         msg = self._make_message(text="Вопрос о прополисе")
+        state = self._make_state()
 
         mock_orchestrator = MagicMock()
         mock_orchestrator.route = AsyncMock(return_value=("ответ", chunks))
+        mock_orchestrator.get_intent = MagicMock(return_value="consult")
 
         with (
             patch("src.bot._should_respond", return_value=True),
@@ -176,7 +192,7 @@ class TestHandleQuestion:
             patch("src.bot.bot") as mock_bot,
         ):
             mock_bot.send_chat_action = AsyncMock()
-            await handle_question(msg)
+            await handle_question(msg, state)
 
         mock_orchestrator.route.assert_called_once_with(msg.from_user.id, "Вопрос о прополисе")
 
@@ -185,9 +201,11 @@ class TestHandleQuestion:
         """Handler should send orchestrator response back to user."""
         expected_reply = "Настойку прополиса принимают по 30 капель."
         msg = self._make_message(text="Как принимать прополис?")
+        state = self._make_state()
 
         mock_orchestrator = MagicMock()
         mock_orchestrator.route = AsyncMock(return_value=(expected_reply, []))
+        mock_orchestrator.get_intent = MagicMock(return_value="consult")
 
         with (
             patch("src.bot._should_respond", return_value=True),
@@ -195,7 +213,7 @@ class TestHandleQuestion:
             patch("src.bot.bot") as mock_bot,
         ):
             mock_bot.send_chat_action = AsyncMock()
-            await handle_question(msg)
+            await handle_question(msg, state)
 
         msg.reply.assert_called_once()
         assert msg.reply.call_args[0][0] == expected_reply
@@ -208,9 +226,11 @@ class TestHandleQuestion:
             chat_type="group",
         )
         msg.reply_to_message = None
+        state = self._make_state()
 
         mock_orchestrator = MagicMock()
         mock_orchestrator.route = AsyncMock(return_value=("ответ", []))
+        mock_orchestrator.get_intent = MagicMock(return_value="consult")
 
         with (
             patch("src.bot._should_respond", return_value=True),
@@ -218,7 +238,7 @@ class TestHandleQuestion:
             patch("src.bot.bot") as mock_bot,
         ):
             mock_bot.send_chat_action = AsyncMock()
-            await handle_question(msg)
+            await handle_question(msg, state)
 
         route_call_query = mock_orchestrator.route.call_args[0][1]
         assert BOT_USERNAME not in route_call_query
@@ -228,6 +248,7 @@ class TestHandleQuestion:
     async def test_error_handling_returns_fallback_message(self):
         """Handler should reply with a fallback message on unexpected errors."""
         msg = self._make_message(text="Вопрос")
+        state = self._make_state()
 
         mock_orchestrator = MagicMock()
         mock_orchestrator.route = AsyncMock(side_effect=RuntimeError("Database error"))
@@ -238,7 +259,7 @@ class TestHandleQuestion:
             patch("src.bot.bot") as mock_bot,
         ):
             mock_bot.send_chat_action = AsyncMock()
-            await handle_question(msg)
+            await handle_question(msg, state)
 
         msg.reply.assert_called_once()
         reply_text = msg.reply.call_args[0][0]

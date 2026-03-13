@@ -35,6 +35,10 @@ INTEGRAM_LOGIN = os.getenv("INTEGRAM_LOGIN")
 INTEGRAM_PASSWORD = os.getenv("INTEGRAM_PASSWORD")
 INTEGRAM_DB = os.getenv("INTEGRAM_DB")
 
+# Telegram ID пчеловода для уведомлений о новых заказах
+_beekeeper_raw = os.getenv("BEEKEEPER_CHAT_ID")
+BEEKEEPER_CHAT_ID: int | None = int(_beekeeper_raw) if _beekeeper_raw else None
+
 # Bot settings
 MAX_CONTEXT_CHUNKS = int(os.getenv("MAX_CONTEXT_CHUNKS", "5"))
 MAX_RESPONSE_LENGTH = int(os.getenv("MAX_RESPONSE_LENGTH", "4096"))
