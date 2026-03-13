@@ -43,6 +43,10 @@ BEEKEEPER_CHAT_ID: int | None = int(_beekeeper_raw) if _beekeeper_raw else None
 _admin_raw = os.getenv("ADMIN_CHAT_ID")
 ADMIN_CHAT_ID: int | None = int(_admin_raw) if _admin_raw else BEEKEEPER_CHAT_ID
 
+# UDS (система лояльности)
+UDS_API_KEY = os.getenv("UDS_API_KEY")
+UDS_COMPANY_ID = os.getenv("UDS_COMPANY_ID")
+
 # Delivery (СДЭК + Почта России)
 CDEK_CLIENT_ID = os.getenv("CDEK_CLIENT_ID")
 CDEK_CLIENT_SECRET = os.getenv("CDEK_CLIENT_SECRET")
