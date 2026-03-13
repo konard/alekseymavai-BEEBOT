@@ -39,6 +39,10 @@ INTEGRAM_DB = os.getenv("INTEGRAM_DB")
 _beekeeper_raw = os.getenv("BEEKEEPER_CHAT_ID")
 BEEKEEPER_CHAT_ID: int | None = int(_beekeeper_raw) if _beekeeper_raw else None
 
+# Telegram ID администратора для доступа к аналитике (агент «Аналитик»)
+_admin_raw = os.getenv("ADMIN_CHAT_ID")
+ADMIN_CHAT_ID: int | None = int(_admin_raw) if _admin_raw else BEEKEEPER_CHAT_ID
+
 # Bot settings
 MAX_CONTEXT_CHUNKS = int(os.getenv("MAX_CONTEXT_CHUNKS", "5"))
 MAX_RESPONSE_LENGTH = int(os.getenv("MAX_RESPONSE_LENGTH", "4096"))

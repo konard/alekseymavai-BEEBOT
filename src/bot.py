@@ -18,7 +18,7 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
-from src.config import TELEGRAM_BOT_TOKEN, BASE_DIR, PDFS_DIR, BEEKEEPER_CHAT_ID
+from src.config import TELEGRAM_BOT_TOKEN, BASE_DIR, PDFS_DIR, BEEKEEPER_CHAT_ID, ADMIN_CHAT_ID
 from src.agents.beebot import (
     INSTRUCTIONS,
     CATEGORY_LABELS as _CATEGORY_LABELS,
@@ -32,6 +32,7 @@ from src.agents.logist import (
     format_order_summary,
 )
 from src.orchestrator import Orchestrator
+from src.agents.analyst import AnalystAgent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +45,10 @@ dp = Dispatcher(storage=MemoryStorage())
 
 orchestrator = Orchestrator()
 logist = LogistAgent(beekeeper_chat_id=BEEKEEPER_CHAT_ID)
+analyst = AnalystAgent(
+    groq_client=orchestrator._groq,
+    groq_model=orchestrator._model,
+)
 
 # Хранилище задач таймаута (user_id → asyncio.Task)
 _timeout_tasks: dict[int, asyncio.Task] = {}
@@ -73,7 +78,8 @@ HELP_MESSAGE = """Как пользоваться ботом:
 /start — начать
 /ask — задать вопрос
 /help — эта справка
-/products — список продуктов с инструкциями"""
+/products — список продуктов с инструкциями
+/stats [запрос] — аналитика продаж (только для администратора)"""
 
 ASK_MESSAGE = "Напишите свой вопрос — я отвечу на основе знаний о продуктах пчеловодства 🐝"
 
@@ -159,6 +165,27 @@ async def cmd_ask(message: types.Message):
 @dp.message(Command("products"))
 async def cmd_products(message: types.Message):
     await message.answer(PRODUCTS_MESSAGE, reply_markup=_build_products_keyboard())
+
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: types.Message):
+    """Аналитика продаж — только для ADMIN_CHAT_ID."""
+    if ADMIN_CHAT_ID is None or message.from_user.id != ADMIN_CHAT_ID:
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    # Получить текст запроса из аргументов команды
+    query = (message.text or "").removeprefix("/stats").strip()
+    if not query:
+        query = "общая статистика"
+
+    await bot.send_chat_action(message.chat.id, "typing")
+    try:
+        report = await analyst.handle_query(query)
+        await message.answer(report, parse_mode="Markdown")
+    except Exception as e:
+        logger.error("Ошибка аналитики: %s", e)
+        await message.answer("Не удалось получить статистику. Попробуйте позже.")
 
 
 @dp.callback_query(F.data == "show_products")

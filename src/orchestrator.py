@@ -111,7 +111,7 @@ class Orchestrator:
 
         self._beebot = BeebotAgent()
         self._logist = LogistAgent()
-        self._analyst = AnalystAgent()
+        self._analyst = AnalystAgent(groq_client=self._groq, groq_model=self._model)
 
         # In-memory dialog state per user_id
         self._dialog_states: dict[int, DialogState] = {}
@@ -223,12 +223,12 @@ class Orchestrator:
         return {**state, "response": response, "chunks": []}
 
     async def _node_analyst(self, state: OrchestratorState) -> OrchestratorState:
-        """Маршрут: stats → Аналитик (заглушка)."""
+        """Маршрут: stats → Аналитик."""
         try:
-            await self._analyst.get_sales_summary()
-        except NotImplementedError:
-            pass
-        response = "Аналитика продаж пока в разработке. Скоро появится!"
+            response = await self._analyst.handle_query(state["query"])
+        except Exception as e:
+            logger.error("AnalystAgent ошибка: %s", e)
+            response = "Не удалось получить статистику. Попробуйте позже."
         return {**state, "response": response, "chunks": []}
 
     # ------------------------------------------------------------------
